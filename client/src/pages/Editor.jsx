@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { EditorState, Transaction } from '@codemirror/state';
+import { EditorState, StateField, Transaction } from '@codemirror/state';
 import {
   Decoration,
   drawSelection,
@@ -16,25 +16,27 @@ import ShareDialog from '../components/ShareDialog';
 import { useCollaboration } from '../hooks/useCollaboration';
 import { api } from '../lib/api';
 
+const LINES_PER_PAGE = 26;
+
 const darkTheme = EditorView.theme(
   {
     '&': {
       color: '#f8fafc',
-      backgroundColor: '#0f172a',
+      backgroundColor: 'transparent',
       fontSize: '16px',
       height: '100%',
-      minHeight: '60vh',
+      minHeight: '800px',
     },
     '.cm-scroller': {
-      overflow: 'auto',
-      minHeight: '60vh',
+      overflow: 'visible',
+      minHeight: '800px',
     },
     '.cm-content': {
       caretColor: '#38bdf8',
-      padding: '16px 0',
+      padding: '0',
       fontFamily:
-        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-      lineHeight: '1.75rem',
+        'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+      lineHeight: '1.85rem',
       color: '#f8fafc',
     },
     '&.cm-focused .cm-cursor': {
@@ -45,12 +47,12 @@ const darkTheme = EditorView.theme(
       backgroundColor: '#3b82f640',
     },
     '.cm-gutters': {
-      backgroundColor: '#0f172a',
+      backgroundColor: 'transparent',
       color: '#64748b',
       border: 'none',
     },
     '.cm-line': {
-      padding: '0 8px',
+      padding: '0',
     },
   },
   { dark: true },
@@ -81,8 +83,8 @@ class PeerCursorWidget extends WidgetType {
     return wrap;
   }
 
-  eq(other) {
-    return other.name === this.name && other.color === this.color;
+  ignoreEvent() {
+    return true;
   }
 }
 
@@ -98,23 +100,29 @@ function createPeerCursorsExtension(getPeers) {
       }
 
       buildDecorations(view) {
-        const builder = [];
-        const peers = getPeers() || [];
-        for (const peer of peers) {
-          if (!peer || !peer.selection || typeof peer.selection.from !== 'number')
-            continue;
-          const pos = Math.min(peer.selection.from, view.state.doc.length);
-          const widget = Decoration.widget({
-            widget: new PeerCursorWidget(
-              peer.name || 'Collaborator',
-              peer.color || '#ec4899',
-            ),
-            side: 1,
-          });
-          builder.push(widget.range(pos));
+        try {
+          const builder = [];
+          const peers = getPeers() || [];
+          const docLen = view.state.doc.length;
+          for (const peer of peers) {
+            if (!peer || !peer.selection || typeof peer.selection.from !== 'number')
+              continue;
+            const pos = Math.max(0, Math.min(peer.selection.from, docLen));
+            const widget = Decoration.widget({
+              widget: new PeerCursorWidget(
+                peer.name || 'Collaborator',
+                peer.color || '#ec4899',
+              ),
+              side: 1,
+            });
+            builder.push(widget.range(pos));
+          }
+          builder.sort((a, b) => a.from - b.from);
+          return Decoration.set(builder, true);
+        } catch (e) {
+          console.error('Error building peer cursors:', e);
+          return Decoration.none;
         }
-        builder.sort((a, b) => a.from - b.from);
-        return Decoration.set(builder);
       }
     },
     {
@@ -122,6 +130,86 @@ function createPeerCursorsExtension(getPeers) {
     },
   );
 }
+
+class PageBreakWidget extends WidgetType {
+  constructor(pageNum) {
+    super();
+    this.pageNum = pageNum;
+  }
+
+  toDOM() {
+    const wrap = document.createElement('div');
+    wrap.className = 'doc-page-break-widget';
+
+    const prevBottomPadding = document.createElement('div');
+    prevBottomPadding.className = 'doc-page-bottom-padding';
+
+    const prevBottomEdge = document.createElement('div');
+    prevBottomEdge.className = 'doc-page-bottom-edge';
+
+    const gap = document.createElement('div');
+    gap.className = 'doc-page-gap-banner';
+    gap.innerHTML = `<span>PAGE ${this.pageNum}</span>`;
+
+    const nextTopEdge = document.createElement('div');
+    nextTopEdge.className = 'doc-page-top-edge';
+
+    const nextTopPadding = document.createElement('div');
+    nextTopPadding.className = 'doc-page-top-padding';
+
+    wrap.appendChild(prevBottomPadding);
+    wrap.appendChild(prevBottomEdge);
+    wrap.appendChild(gap);
+    wrap.appendChild(nextTopEdge);
+    wrap.appendChild(nextTopPadding);
+    return wrap;
+  }
+
+  eq(other) {
+    return other.pageNum === this.pageNum;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+function buildPageBreakDecorations(state) {
+  try {
+    const builder = [];
+    const doc = state.doc;
+    for (let lineNo = 1; lineNo <= doc.lines; lineNo++) {
+      if (lineNo > 1 && (lineNo - 1) % LINES_PER_PAGE === 0) {
+        const line = doc.line(lineNo);
+        const pageNum = Math.floor((lineNo - 1) / LINES_PER_PAGE) + 1;
+        const widget = Decoration.widget({
+          widget: new PageBreakWidget(pageNum),
+          side: -1,
+          block: true,
+        });
+        builder.push(widget.range(line.from));
+      }
+    }
+    builder.sort((a, b) => a.from - b.from);
+    return Decoration.set(builder, true);
+  } catch (e) {
+    console.error('Error building page breaks:', e);
+    return Decoration.none;
+  }
+}
+
+const pageBreaksField = StateField.define({
+  create(state) {
+    return buildPageBreakDecorations(state);
+  },
+  update(decorations, tr) {
+    if (tr.docChanged) {
+      return buildPageBreakDecorations(tr.state);
+    }
+    return decorations;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 function SyncStatus({ status }) {
   const labels = { Offline: '📴 Offline', Saved: '✓ Saved' };
@@ -159,6 +247,13 @@ export default function Editor() {
   const [error, setError] = useState('');
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [docStats, setDocStats] = useState({
+    words: 0,
+    chars: 0,
+    lines: 1,
+    pages: 1,
+    currentPage: 1,
+  });
 
   const {
     doc,
@@ -176,6 +271,22 @@ export default function Editor() {
       editorViewRef.current.dispatch({});
     }
   }, [peers]);
+
+  function updateStats(view) {
+    if (!view || !view.state || !view.state.doc) return;
+    const text = view.state.doc.toString();
+    const lines = view.state.doc.lines;
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    const chars = text.length;
+    const pages = Math.max(1, Math.ceil(lines / LINES_PER_PAGE));
+    const headPos = view.state.selection?.main?.head || 0;
+    const currentLine = view.state.doc.lineAt(headPos).number;
+    const currentPage = Math.min(
+      pages,
+      Math.max(1, Math.floor((currentLine - 1) / LINES_PER_PAGE) + 1),
+    );
+    setDocStats({ words, chars, lines, pages, currentPage });
+  }
 
   useEffect(() => {
     async function loadDocument() {
@@ -222,6 +333,7 @@ export default function Editor() {
           changes: { from: 0, to: currentValue.length, insert: nextValue },
           annotations: Transaction.userEvent.of('yjs'),
         });
+        updateStats(view);
       }
     }
 
@@ -233,10 +345,13 @@ export default function Editor() {
         dropCursor(),
         darkTheme,
         createPeerCursorsExtension(() => peersRef.current),
+        pageBreaksField,
         EditorView.lineWrapping,
         EditorView.editable.of(role !== 'VIEWER'),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         EditorView.updateListener.of((update) => {
+          updateStats(update.view);
+
           if (
             update.docChanged &&
             !update.transactions.some(
@@ -266,6 +381,7 @@ export default function Editor() {
     });
 
     editorViewRef.current = editorView;
+    updateStats(editorView);
     ytext.observe(syncEditorFromYjs);
 
     return () => {
@@ -292,23 +408,24 @@ export default function Editor() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-slate-950 text-slate-100">
-      <header className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+    <main className="flex h-screen flex-col bg-slate-950 text-slate-100 overflow-hidden">
+      {/* Top Main Navigation Header */}
+      <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-5 py-3.5 backdrop-blur z-10">
         <div>
           <Link
-            className="text-sm text-violet-400 hover:text-violet-300 transition"
+            className="text-xs font-medium text-violet-400 hover:text-violet-300 transition"
             to="/dashboard"
           >
             ← Documents
           </Link>
-          <h1 className="mt-1 font-semibold">{document.title}</h1>
+          <h1 className="mt-0.5 text-base font-semibold">{document.title}</h1>
         </div>
 
         <div className="flex items-center gap-3 text-sm">
           <ParticipantAvatars peers={peers} />
           <SyncStatus status={status} />
           <button
-            className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800 transition"
+            className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 hover:bg-slate-800 transition"
             onClick={() => setIsHistoryOpen(true)}
           >
             History
@@ -324,13 +441,49 @@ export default function Editor() {
         </div>
       </header>
 
-      <section className="mx-auto w-full max-w-4xl flex-1 px-5 py-10">
+      {/* Docs Toolbar */}
+      <div className="flex items-center justify-between border-b border-slate-800/80 bg-slate-900/40 px-6 py-2 text-xs text-slate-400">
+        <div className="flex items-center gap-4">
+          <span className="rounded px-2 py-1 bg-slate-800/80 text-slate-300 font-medium">
+            100%
+          </span>
+          <span className="h-3 w-px bg-slate-800" />
+          <span>Print Layout</span>
+          <span className="h-3 w-px bg-slate-800" />
+          <span>Paginated View</span>
+        </div>
+        <div>
+          <span>
+            {docStats.pages} Page{docStats.pages > 1 ? 's' : ''} Document
+          </span>
+        </div>
+      </div>
+
+      {/* Google Docs Canvas Workspace */}
+      <div className="flex-1 overflow-y-auto bg-slate-950 py-10 px-4 flex flex-col items-center scroll-smooth">
         <div
           ref={editorHostRef}
           onClick={() => editorViewRef.current?.focus()}
-          className="min-h-[65vh] cursor-text rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-xl transition-colors focus-within:border-slate-700"
+          className="doc-paper-sheet cursor-text transition-all focus-within:ring-1 focus-within:ring-violet-500/40"
         />
-      </section>
+      </div>
+
+      {/* Bottom Status Bar */}
+      <footer className="sticky bottom-0 z-10 flex items-center justify-between border-t border-slate-800 bg-slate-900/90 px-6 py-2 text-xs text-slate-400 backdrop-blur">
+        <div className="flex items-center gap-4">
+          <span>
+            Page {docStats.currentPage || 1} of {docStats.pages}
+          </span>
+          <span className="h-3 w-px bg-slate-800" />
+          <span>{docStats.words} words</span>
+          <span className="h-3 w-px bg-slate-800" />
+          <span>{docStats.chars} characters</span>
+        </div>
+        <div className="flex items-center gap-2 text-slate-500">
+          <span className="h-2 w-2 rounded-full bg-emerald-400" />
+          <span>Real-time Auto-Paginated View</span>
+        </div>
+      </footer>
 
       {isShareOpen && (
         <ShareDialog documentId={documentId} onClose={() => setIsShareOpen(false)} />

@@ -5,6 +5,25 @@ import { tokenFromCookie, verifyToken } from './auth.js';
 import { canEdit, documentRole } from './services/access.js';
 
 const rooms = new Map();
+const PALETTE = [
+  '#8b5cf6',
+  '#ec4899',
+  '#3b82f6',
+  '#10b981',
+  '#f59e0b',
+  '#06b6d4',
+  '#a855f7',
+];
+
+function getAuthorColor(authorId) {
+  let hash = 0;
+  for (let i = 0; i < (authorId || '').length; i++) {
+    hash = (hash << 5) - hash + authorId.charCodeAt(i);
+    hash |= 0;
+  }
+  return PALETTE[Math.abs(hash) % PALETTE.length];
+}
+
 const json = (socket, data) => socket.send(JSON.stringify(data));
 const broadcast = (room, data, except) =>
   room.clients.forEach((client) => {
@@ -24,8 +43,7 @@ async function getRoom(id) {
     doc,
     clients: new Set(),
     presence: new Map(),
-    pendingUpdates: [],
-    lastAuthorId: null,
+    pendingUpdatesByAuthor: new Map(),
     flushTimer: null,
   };
   rooms.set(id, room);
@@ -37,36 +55,37 @@ async function flushRoomUpdates(documentId, room) {
     clearTimeout(room.flushTimer);
     room.flushTimer = null;
   }
-  if (!room.pendingUpdates || room.pendingUpdates.length === 0) return;
 
-  const updatesToFlush = room.pendingUpdates;
-  const authorId = room.lastAuthorId;
-  room.pendingUpdates = [];
-  room.lastAuthorId = null;
+  if (!room.pendingUpdatesByAuthor || room.pendingUpdatesByAuthor.size === 0) return;
 
-  try {
-    const merged = Y.mergeUpdates(updatesToFlush);
-    await prisma.documentUpdate.create({
-      data: {
-        documentId,
-        authorId,
-        update: Buffer.from(merged),
-      },
-    });
-    await prisma.document.update({
-      where: { id: documentId },
-      data: { updatedAt: new Date() },
-    });
-  } catch (dbError) {
-    console.error(
-      'Debounced DB save error (realtime sync unaffected):',
-      dbError.message,
-    );
+  const entriesToFlush = Array.from(room.pendingUpdatesByAuthor.entries());
+  room.pendingUpdatesByAuthor.clear();
+
+  for (const [authorId, updates] of entriesToFlush) {
+    if (!updates || updates.length === 0) continue;
+    try {
+      const merged = Y.mergeUpdates(updates);
+      await prisma.documentUpdate.create({
+        data: {
+          documentId,
+          authorId,
+          update: Buffer.from(merged),
+        },
+      });
+      await prisma.document.update({
+        where: { id: documentId },
+        data: { updatedAt: new Date() },
+      });
+    } catch (dbError) {
+      console.error(
+        `Debounced DB save error for author ${authorId} (realtime sync unaffected):`,
+        dbError.message,
+      );
+    }
   }
 }
 
-function scheduleDebouncedFlush(documentId, room, authorId) {
-  room.lastAuthorId = authorId;
+function scheduleDebouncedFlush(documentId, room) {
   if (room.flushTimer) {
     clearTimeout(room.flushTimer);
   }
@@ -105,6 +124,15 @@ export function attachCollaboration(server) {
         socket.documentId = documentId;
         socket.role = role;
 
+        const color = getAuthorColor(auth.sub);
+        const presenceUser = {
+          userId: auth.sub,
+          name: user?.name || 'Collaborator',
+          color,
+        };
+
+        room.presence.set(auth.sub, presenceUser);
+
         json(socket, {
           type: 'ready',
           state: Buffer.from(Y.encodeStateAsUpdate(room.doc)).toString('base64'),
@@ -112,18 +140,12 @@ export function attachCollaboration(server) {
           peers: [...room.presence.values()],
         });
 
-        room.presence.set(auth.sub, {
-          userId: auth.sub,
-          name: user?.name || 'Collaborator',
-          color: '#8b5cf6',
-        });
-
         broadcast(
           room,
           JSON.stringify({
             type: 'presence',
             event: 'join',
-            user: room.presence.get(auth.sub),
+            user: presenceUser,
           }),
           socket,
         );
@@ -138,9 +160,12 @@ export function attachCollaboration(server) {
               // 1. Broadcast immediately to all connected clients in the room
               broadcast(room, update, socket);
 
-              // 2. Buffer update in memory & schedule debounced DB save (3 seconds pause)
-              room.pendingUpdates.push(update);
-              scheduleDebouncedFlush(documentId, room, auth.sub);
+              // 2. Buffer update by author ID in memory & schedule debounced DB save
+              if (!room.pendingUpdatesByAuthor.has(auth.sub)) {
+                room.pendingUpdatesByAuthor.set(auth.sub, []);
+              }
+              room.pendingUpdatesByAuthor.get(auth.sub).push(update);
+              scheduleDebouncedFlush(documentId, room);
             } else {
               const payload = JSON.parse(message.toString());
               if (payload.type === 'awareness') {
@@ -175,8 +200,7 @@ export function attachCollaboration(server) {
           room.clients.delete(socket);
           room.presence.delete(auth.sub);
 
-          // Flush any pending updates when all clients disconnect or socket closes
-          if (room.pendingUpdates.length > 0) {
+          if (room.pendingUpdatesByAuthor.size > 0) {
             flushRoomUpdates(documentId, room);
           }
 

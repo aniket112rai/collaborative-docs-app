@@ -8,11 +8,38 @@ const include = {
   members: { include: { user: { select: { id: true, name: true, email: true } } } },
 };
 router.get('/', async (req, res) => {
-  const documents = await prisma.document.findMany({
+  const rawDocuments = await prisma.document.findMany({
     where: { members: { some: { userId: req.auth.sub } } },
-    include,
+    include: {
+      ...include,
+      updates: {
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: { authorId: true },
+      },
+    },
     orderBy: { updatedAt: 'desc' },
   });
+
+  const authorIds = [
+    ...new Set(rawDocuments.map((doc) => doc.updates[0]?.authorId).filter(Boolean)),
+  ];
+  const users = await prisma.user.findMany({
+    where: { id: { in: authorIds } },
+    select: { id: true, name: true },
+  });
+  const namesMap = new Map(users.map((u) => [u.id, u.name]));
+
+  const documents = rawDocuments.map((doc) => {
+    const lastAuthorId = doc.updates[0]?.authorId;
+    const lastEditorName = lastAuthorId ? namesMap.get(lastAuthorId) : doc.owner.name;
+    const { updates, ...cleanDoc } = doc;
+    return {
+      ...cleanDoc,
+      lastEditorName: lastEditorName || doc.owner.name,
+    };
+  });
+
   res.json({ documents });
 });
 router.post('/', async (req, res) => {

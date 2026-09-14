@@ -66,7 +66,11 @@ export default function Dashboard() {
               <p className="mb-10 text-lg font-semibold group-hover:text-violet-300">
                 {doc.title}
               </p>
-              <p className="text-sm text-slate-400">Owned by {doc.owner.name}</p>
+              <p className="text-sm text-slate-400">
+                {doc.lastEditorName
+                  ? `Updated by ${doc.lastEditorName}`
+                  : `Owned by ${doc.owner.name}`}
+              </p>
               <p className="mt-1 text-xs text-slate-500">
                 Updated {new Date(doc.updatedAt).toLocaleString()}
               </p>

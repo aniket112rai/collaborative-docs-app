@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { EditorState, Transaction } from '@codemirror/state';
-import { drawSelection, dropCursor, EditorView, keymap } from '@codemirror/view';
+import {
+  Decoration,
+  drawSelection,
+  dropCursor,
+  EditorView,
+  keymap,
+  ViewPlugin,
+  WidgetType,
+} from '@codemirror/view';
 import { Link, useParams } from 'react-router-dom';
 import HistoryDialog from '../components/HistoryDialog';
 import ShareDialog from '../components/ShareDialog';
@@ -48,6 +56,73 @@ const darkTheme = EditorView.theme(
   { dark: true },
 );
 
+class PeerCursorWidget extends WidgetType {
+  constructor(name, color) {
+    super();
+    this.name = name;
+    this.color = color;
+  }
+
+  toDOM() {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-peer-caret-container';
+
+    const caret = document.createElement('span');
+    caret.className = 'cm-peer-caret';
+    caret.style.backgroundColor = this.color;
+
+    const label = document.createElement('span');
+    label.className = 'cm-peer-label';
+    label.style.backgroundColor = this.color;
+    label.textContent = this.name;
+
+    wrap.appendChild(caret);
+    wrap.appendChild(label);
+    return wrap;
+  }
+
+  eq(other) {
+    return other.name === this.name && other.color === this.color;
+  }
+}
+
+function createPeerCursorsExtension(getPeers) {
+  return ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.decorations = this.buildDecorations(view);
+      }
+
+      update(update) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+
+      buildDecorations(view) {
+        const builder = [];
+        const peers = getPeers() || [];
+        for (const peer of peers) {
+          if (!peer || !peer.selection || typeof peer.selection.from !== 'number')
+            continue;
+          const pos = Math.min(peer.selection.from, view.state.doc.length);
+          const widget = Decoration.widget({
+            widget: new PeerCursorWidget(
+              peer.name || 'Collaborator',
+              peer.color || '#ec4899',
+            ),
+            side: 1,
+          });
+          builder.push(widget.range(pos));
+        }
+        builder.sort((a, b) => a.from - b.from);
+        return Decoration.set(builder);
+      }
+    },
+    {
+      decorations: (v) => v.decorations,
+    },
+  );
+}
+
 function SyncStatus({ status }) {
   const labels = { Offline: '📴 Offline', Saved: '✓ Saved' };
   const label = labels[status] || `⟳ ${status}`;
@@ -65,7 +140,8 @@ function ParticipantAvatars({ peers }) {
         <span
           key={peer.userId}
           title={`${peer.name} is editing`}
-          className="grid h-7 w-7 place-items-center rounded-full bg-violet-600 text-xs font-semibold text-white"
+          style={{ backgroundColor: peer.color || '#8b5cf6' }}
+          className="grid h-7 w-7 place-items-center rounded-full text-xs font-semibold text-white shadow-sm"
         >
           {peer.name[0]?.toUpperCase() || '?'}
         </span>
@@ -92,6 +168,14 @@ export default function Editor() {
     status,
   } = useCollaboration(documentId);
   const role = realtimeRole || accessRole;
+
+  const peersRef = useRef(peers);
+  useEffect(() => {
+    peersRef.current = peers;
+    if (editorViewRef.current) {
+      editorViewRef.current.dispatch({});
+    }
+  }, [peers]);
 
   useEffect(() => {
     async function loadDocument() {
@@ -148,6 +232,7 @@ export default function Editor() {
         drawSelection(),
         dropCursor(),
         darkTheme,
+        createPeerCursorsExtension(() => peersRef.current),
         EditorView.lineWrapping,
         EditorView.editable.of(role !== 'VIEWER'),
         keymap.of([...defaultKeymap, ...historyKeymap]),

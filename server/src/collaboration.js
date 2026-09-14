@@ -10,6 +10,7 @@ const broadcast = (room, data, except) =>
   room.clients.forEach((client) => {
     if (client !== except && client.readyState === WebSocket.OPEN) client.send(data);
   });
+
 async function getRoom(id) {
   if (rooms.has(id)) return rooms.get(id);
   const doc = new Y.Doc();
@@ -19,10 +20,61 @@ async function getRoom(id) {
     select: { update: true },
   });
   updates.forEach(({ update }) => Y.applyUpdate(doc, update));
-  const room = { doc, clients: new Set(), presence: new Map() };
+  const room = {
+    doc,
+    clients: new Set(),
+    presence: new Map(),
+    pendingUpdates: [],
+    lastAuthorId: null,
+    flushTimer: null,
+  };
   rooms.set(id, room);
   return room;
 }
+
+async function flushRoomUpdates(documentId, room) {
+  if (room.flushTimer) {
+    clearTimeout(room.flushTimer);
+    room.flushTimer = null;
+  }
+  if (!room.pendingUpdates || room.pendingUpdates.length === 0) return;
+
+  const updatesToFlush = room.pendingUpdates;
+  const authorId = room.lastAuthorId;
+  room.pendingUpdates = [];
+  room.lastAuthorId = null;
+
+  try {
+    const merged = Y.mergeUpdates(updatesToFlush);
+    await prisma.documentUpdate.create({
+      data: {
+        documentId,
+        authorId,
+        update: Buffer.from(merged),
+      },
+    });
+    await prisma.document.update({
+      where: { id: documentId },
+      data: { updatedAt: new Date() },
+    });
+  } catch (dbError) {
+    console.error(
+      'Debounced DB save error (realtime sync unaffected):',
+      dbError.message,
+    );
+  }
+}
+
+function scheduleDebouncedFlush(documentId, room, authorId) {
+  room.lastAuthorId = authorId;
+  if (room.flushTimer) {
+    clearTimeout(room.flushTimer);
+  }
+  room.flushTimer = setTimeout(() => {
+    flushRoomUpdates(documentId, room);
+  }, 3000);
+}
+
 export function attachCollaboration(server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
   wss.on('connection', async (socket, request) => {
@@ -52,17 +104,20 @@ export function attachCollaboration(server) {
         socket.room = room;
         socket.documentId = documentId;
         socket.role = role;
+
         json(socket, {
           type: 'ready',
           state: Buffer.from(Y.encodeStateAsUpdate(room.doc)).toString('base64'),
           role,
           peers: [...room.presence.values()],
         });
+
         room.presence.set(auth.sub, {
           userId: auth.sub,
           name: user?.name || 'Collaborator',
           color: '#8b5cf6',
         });
+
         broadcast(
           room,
           JSON.stringify({
@@ -72,6 +127,7 @@ export function attachCollaboration(server) {
           }),
           socket,
         );
+
         socket.on('message', async (message, isBinary) => {
           try {
             if (isBinary) {
@@ -82,21 +138,9 @@ export function attachCollaboration(server) {
               // 1. Broadcast immediately to all connected clients in the room
               broadcast(room, update, socket);
 
-              // 2. Persist update to DB (errors won't block realtime sync or crash server)
-              try {
-                await prisma.documentUpdate.create({
-                  data: { documentId, authorId: auth.sub, update: Buffer.from(update) },
-                });
-                await prisma.document.update({
-                  where: { id: documentId },
-                  data: { updatedAt: new Date() },
-                });
-              } catch (dbError) {
-                console.error(
-                  'Database save error (realtime sync unaffected):',
-                  dbError.message,
-                );
-              }
+              // 2. Buffer update in memory & schedule debounced DB save (3 seconds pause)
+              room.pendingUpdates.push(update);
+              scheduleDebouncedFlush(documentId, room, auth.sub);
             } else {
               const payload = JSON.parse(message.toString());
               if (payload.type === 'awareness') {
@@ -126,9 +170,16 @@ export function attachCollaboration(server) {
             );
           }
         });
+
         socket.on('close', () => {
           room.clients.delete(socket);
           room.presence.delete(auth.sub);
+
+          // Flush any pending updates when all clients disconnect or socket closes
+          if (room.pendingUpdates.length > 0) {
+            flushRoomUpdates(documentId, room);
+          }
+
           broadcast(
             room,
             JSON.stringify({ type: 'presence', event: 'leave', userId: auth.sub }),

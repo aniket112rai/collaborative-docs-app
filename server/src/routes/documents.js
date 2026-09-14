@@ -97,22 +97,48 @@ router.delete('/:id/members/:userId', async (req, res) => {
 router.get('/:id/history', async (req, res) => {
   if (!(await documentRole(req.params.id, req.auth.sub)))
     return res.status(404).json({ error: 'Document not found' });
-  const updates = await prisma.documentUpdate.findMany({
+  const rawUpdates = await prisma.documentUpdate.findMany({
     where: { documentId: req.params.id },
     select: { id: true, authorId: true, createdAt: true },
     orderBy: { createdAt: 'desc' },
-    take: 100,
+    take: 200,
   });
+
+  const userIds = [...new Set(rawUpdates.map((item) => item.authorId).filter(Boolean))];
   const users = await prisma.user.findMany({
-    where: { id: { in: updates.map((item) => item.authorId).filter(Boolean) } },
+    where: { id: { in: userIds } },
     select: { id: true, name: true },
   });
   const names = new Map(users.map((user) => [user.id, user.name]));
-  res.json({
-    events: updates.map((item) => ({
-      ...item,
-      author: names.get(item.authorId) || 'Unknown user',
-    })),
-  });
+
+  const groupedEvents = [];
+  const THREE_MINUTES_MS = 3 * 60 * 1000;
+
+  for (const item of rawUpdates) {
+    const authorName = names.get(item.authorId) || 'Collaborator';
+    const itemTime = new Date(item.createdAt).getTime();
+
+    if (groupedEvents.length > 0) {
+      const lastGroup = groupedEvents[groupedEvents.length - 1];
+      const lastGroupTime = new Date(lastGroup.createdAt).getTime();
+      const sameAuthor = lastGroup.authorId === item.authorId;
+      const withinTimeWindow = Math.abs(lastGroupTime - itemTime) <= THREE_MINUTES_MS;
+
+      if (sameAuthor && withinTimeWindow) {
+        lastGroup.count += 1;
+        continue;
+      }
+    }
+
+    groupedEvents.push({
+      id: item.id,
+      authorId: item.authorId,
+      author: authorName,
+      createdAt: item.createdAt,
+      count: 1,
+    });
+  }
+
+  res.json({ events: groupedEvents.slice(0, 50) });
 });
 export default router;

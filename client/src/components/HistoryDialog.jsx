@@ -24,7 +24,10 @@ export default function HistoryDialog({ documentId, onClose }) {
           ) : events.length ? (
             events.map((event) => (
               <div key={event.id} className="border-l-2 border-violet-500 pl-3">
-                <p className="text-sm font-medium">{event.author} edited</p>
+                <p className="text-sm font-medium">
+                  {event.author} edited{' '}
+                  {event.count > 1 ? `(${event.count} updates)` : ''}
+                </p>
                 <p className="text-xs text-slate-500">
                   {new Date(event.createdAt).toLocaleString()}
                 </p>

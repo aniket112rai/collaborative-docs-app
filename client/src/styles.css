@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@layer base {
+  body {
+    @apply bg-slate-950 font-sans;
+  }
+  input {
+    @apply w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none placeholder:text-slate-500 focus:border-violet-500;
+  }
+}
+@layer components {
+  .primary {
+    @apply rounded-lg bg-violet-600 px-4 py-2.5 font-semibold text-white transition hover:bg-violet-500;
+  }
+}
+
+.cm-editor {
+  min-height: 60vh;
+  height: 100%;
+  font-size: 1rem;
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-scroller {
+  min-height: 60vh;
+  height: 100%;
+}
+.cm-content {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+    'Courier New', monospace;
+  line-height: 1.75rem;
+  color: #f8fafc;
+}
+.cm-gutters {
+  display: none;
+}

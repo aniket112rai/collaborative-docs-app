@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+model User {
+  id             String           @id @default(cuid())
+  name           String
+  email          String           @unique
+  passwordHash   String
+  createdAt      DateTime         @default(now())
+  documents      Document[]       @relation("OwnerDocuments")
+  memberships    DocumentMember[]
+  createdInvites Invite[]         @relation("InviteCreator")
+}
+
+model Document {
+  id        String           @id @default(cuid())
+  title     String           @db.VarChar(160)
+  ownerId   String
+  owner     User             @relation("OwnerDocuments", fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  members   DocumentMember[]
+  invites   Invite[]
+  updates   DocumentUpdate[]
+}
+
+model DocumentMember {
+  id         String   @id @default(cuid())
+  documentId String
+  userId     String
+  role       Role     @default(EDITOR)
+  joinedAt   DateTime @default(now())
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+}
+
+model Invite {
+  id          String    @id @default(cuid())
+  documentId  String
+  token       String    @unique
+  role        Role      @default(EDITOR)
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdById String
+  createdAt   DateTime  @default(now())
+  document    Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation("InviteCreator", fields: [createdById], references: [id])
+}
+
+model DocumentUpdate {
+  id         String   @id @default(cuid())
+  documentId String
+  authorId   String?
+  update     Bytes
+  createdAt  DateTime @default(now())
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, createdAt])
+}

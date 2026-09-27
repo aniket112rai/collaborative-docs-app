@@ -34,6 +34,7 @@ export function useCollaboration(documentId) {
     let socket;
     let reconnectTimer;
     let isOnline = navigator.onLine;
+    let isDisposed = false;
 
     function setPeerPresence(message) {
       if (!message) return;
@@ -55,6 +56,7 @@ export function useCollaboration(documentId) {
     }
 
     function handleMessage({ data }) {
+      if (isDisposed) return;
       if (typeof data !== 'string') {
         Y.applyUpdate(ydoc, new Uint8Array(data), 'remote');
         setStatus('Saved');
@@ -85,7 +87,7 @@ export function useCollaboration(documentId) {
     }
 
     function connect() {
-      if (!isOnline) {
+      if (!isOnline || isDisposed) {
         return;
       }
 
@@ -94,11 +96,15 @@ export function useCollaboration(documentId) {
       socketRef.current = socket;
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => {
+        if (isDisposed) {
+          socket.close();
+          return;
+        }
         socket.send(JSON.stringify({ type: 'join', documentId }));
       };
       socket.onmessage = handleMessage;
       socket.onclose = () => {
-        if (!isOnline) {
+        if (!isOnline || isDisposed) {
           return;
         }
 
@@ -108,7 +114,7 @@ export function useCollaboration(documentId) {
     }
 
     function sendUpdate(bytes, origin) {
-      if (origin === 'remote') {
+      if (origin === 'remote' || isDisposed) {
         return;
       }
 
@@ -121,28 +127,53 @@ export function useCollaboration(documentId) {
     }
 
     function handleOnline() {
+      if (isDisposed) return;
       isOnline = true;
       connect();
     }
 
     function handleOffline() {
       isOnline = false;
-      socket?.close();
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+      }
       setStatus('Offline');
+    }
+
+    function handlePageHide() {
+      isDisposed = true;
+      window.clearTimeout(reconnectTimer);
+      if (socket) {
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.close();
+        socketRef.current = null;
+      }
     }
 
     ydoc.on('update', sendUpdate);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('beforeunload', handlePageHide);
+    window.addEventListener('pagehide', handlePageHide);
     connect();
 
     return () => {
+      isDisposed = true;
       ydoc.off('update', sendUpdate);
       persistence.destroy();
-      socket?.close();
       window.clearTimeout(reconnectTimer);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('beforeunload', handlePageHide);
+      window.removeEventListener('pagehide', handlePageHide);
+      if (socket) {
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.close();
+        socketRef.current = null;
+      }
     };
   }, [documentId]);
 

@@ -96,7 +96,27 @@ function scheduleDebouncedFlush(documentId, room) {
 
 export function attachCollaboration(server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
+
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((socket) => {
+      if (socket.isAlive === false) {
+        return socket.terminate();
+      }
+      socket.isAlive = false;
+      socket.ping();
+    });
+  }, 15000);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
+
   wss.on('connection', async (socket, request) => {
+    socket.isAlive = true;
+    socket.on('pong', () => {
+      socket.isAlive = true;
+    });
+
     let auth;
     try {
       auth = verifyToken(tokenFromCookie(request.headers.cookie));
@@ -123,6 +143,7 @@ export function attachCollaboration(server) {
         socket.room = room;
         socket.documentId = documentId;
         socket.role = role;
+        socket.userId = auth.sub;
 
         const color = getAuthorColor(auth.sub);
         const presenceUser = {
@@ -198,16 +219,22 @@ export function attachCollaboration(server) {
 
         socket.on('close', () => {
           room.clients.delete(socket);
-          room.presence.delete(auth.sub);
+
+          const hasOtherSockets = Array.from(room.clients).some(
+            (client) => client.userId === auth.sub,
+          );
+
+          if (!hasOtherSockets) {
+            room.presence.delete(auth.sub);
+            broadcast(
+              room,
+              JSON.stringify({ type: 'presence', event: 'leave', userId: auth.sub }),
+            );
+          }
 
           if (room.pendingUpdatesByAuthor.size > 0) {
             flushRoomUpdates(documentId, room);
           }
-
-          broadcast(
-            room,
-            JSON.stringify({ type: 'presence', event: 'leave', userId: auth.sub }),
-          );
         });
       } catch {
         socket.close(4400, 'Invalid collaboration request');

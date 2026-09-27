@@ -10,8 +10,9 @@ import {
   ViewPlugin,
   WidgetType,
 } from '@codemirror/view';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import HistoryDialog from '../components/HistoryDialog';
+import MembersDialog from '../components/MembersDialog';
 import ShareDialog from '../components/ShareDialog';
 import { useCollaboration } from '../hooks/useCollaboration';
 import { api } from '../lib/api';
@@ -240,6 +241,7 @@ function ParticipantAvatars({ peers }) {
 
 export default function Editor() {
   const { id: documentId } = useParams();
+  const navigate = useNavigate();
   const editorHostRef = useRef();
   const editorViewRef = useRef();
   const [document, setDocument] = useState();
@@ -247,6 +249,41 @@ export default function Editor() {
   const [error, setError] = useState('');
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isMembersOpen, setIsMembersOpen] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+
+  async function handleRenameSubmit(e) {
+    e.preventDefault();
+    const trimmed = newTitle.trim();
+    if (!trimmed || trimmed === document?.title) {
+      setIsEditingTitle(false);
+      return;
+    }
+    try {
+      const { data } = await api.patch(`/documents/${documentId}`, { title: trimmed });
+      setDocument((prev) => ({ ...prev, title: data.document.title }));
+      setIsEditingTitle(false);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to rename document');
+    }
+  }
+
+  async function handleDeleteDoc() {
+    if (
+      !window.confirm(
+        `Are you sure you want to delete "${document?.title || 'this document'}"?`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.delete(`/documents/${documentId}`);
+      navigate('/dashboard');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to delete document');
+    }
+  }
   const [docStats, setDocStats] = useState({
     words: 0,
     chars: 0,
@@ -418,7 +455,65 @@ export default function Editor() {
           >
             ← Documents
           </Link>
-          <h1 className="mt-0.5 text-base font-semibold">{document.title}</h1>
+          {isEditingTitle ? (
+            <form
+              onSubmit={handleRenameSubmit}
+              className="flex items-center gap-1.5 mt-0.5"
+            >
+              <input
+                type="text"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setIsEditingTitle(false);
+                }}
+                className="rounded border border-slate-700 bg-slate-950 px-2 py-0.5 text-sm font-semibold text-slate-100 focus:border-violet-500 focus:outline-none"
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="rounded bg-violet-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-violet-500 transition"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEditingTitle(false)}
+                className="rounded bg-slate-800 px-2 py-0.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition"
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <div className="flex items-center gap-2 mt-0.5">
+              <h1 className="text-base font-semibold">{document.title}</h1>
+              {role === 'OWNER' && (
+                <button
+                  onClick={() => {
+                    setNewTitle(document.title);
+                    setIsEditingTitle(true);
+                  }}
+                  className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition"
+                  title="Rename document"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-4 w-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-3 text-sm">
@@ -426,14 +521,28 @@ export default function Editor() {
           <SyncStatus status={status} />
           <button
             className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 hover:bg-slate-800 transition"
+            onClick={() => setIsMembersOpen(true)}
+          >
+            Members
+          </button>
+          <button
+            className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 hover:bg-slate-800 transition"
             onClick={() => setIsHistoryOpen(true)}
           >
             History
           </button>
           {role === 'OWNER' && (
-            <button className="primary py-1.5" onClick={() => setIsShareOpen(true)}>
-              Share
-            </button>
+            <>
+              <button className="primary py-1.5" onClick={() => setIsShareOpen(true)}>
+                Share
+              </button>
+              <button
+                className="rounded-lg border border-rose-900/60 bg-rose-950/40 px-3 py-1.5 text-rose-300 hover:bg-rose-900/60 transition"
+                onClick={handleDeleteDoc}
+              >
+                Delete
+              </button>
+            </>
           )}
           <span className="rounded-full bg-slate-800 px-3 py-1 font-mono text-xs text-slate-300">
             {role}
@@ -452,9 +561,14 @@ export default function Editor() {
           <span className="h-3 w-px bg-slate-800" />
           <span>Paginated View</span>
         </div>
-        <div>
+        <div className="flex items-center gap-4">
           <span>
             {docStats.pages} Page{docStats.pages > 1 ? 's' : ''} Document
+          </span>
+          <span className="h-3 w-px bg-slate-800" />
+          <span className="flex items-center gap-1.5 rounded-md border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 font-medium text-emerald-400">
+            <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+            {peers?.length || 0} online
           </span>
         </div>
       </div>
@@ -492,6 +606,14 @@ export default function Editor() {
         <HistoryDialog
           documentId={documentId}
           onClose={() => setIsHistoryOpen(false)}
+        />
+      )}
+      {isMembersOpen && (
+        <MembersDialog
+          documentId={documentId}
+          currentUserRole={role}
+          peers={peers}
+          onClose={() => setIsMembersOpen(false)}
         />
       )}
     </main>

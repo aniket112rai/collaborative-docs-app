@@ -486,7 +486,7 @@ export default function Editor() {
               beforeLines.length > 0 ? beforeLines.join('\n').length + 1 : 0;
 
             return (
-              <div key={pageNum} className="w-full flex flex-col items-center">
+              <div key={pageNum} className="doc-print-page w-full flex flex-col items-center">
                 {idx > 0 && (
                   <div className="w-full flex items-center justify-center my-6 no-print doc-page-banner">
                     <span className="rounded-full bg-slate-800 border border-slate-700 px-4 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-widest shadow-md">

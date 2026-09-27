@@ -30,6 +30,21 @@ const broadcast = (room, data, except) =>
     if (client !== except && client.readyState === WebSocket.OPEN) client.send(data);
   });
 
+function removeClientPresence(room, socket, userId) {
+  room.clients.delete(socket);
+
+  const hasOtherSockets = Array.from(room.clients).some(
+    (client) => client.userId === userId,
+  );
+
+  if (!hasOtherSockets && room.presence.delete(userId)) {
+    broadcast(
+      room,
+      JSON.stringify({ type: 'presence', event: 'leave', userId }),
+    );
+  }
+}
+
 async function getRoom(id) {
   if (rooms.has(id)) return rooms.get(id);
   const doc = new Y.Doc();
@@ -189,6 +204,12 @@ export function attachCollaboration(server) {
               scheduleDebouncedFlush(documentId, room);
             } else {
               const payload = JSON.parse(message.toString());
+              if (payload.type === 'leave') {
+                removeClientPresence(room, socket, auth.sub);
+                socket.close();
+                return;
+              }
+
               if (payload.type === 'awareness') {
                 const current = room.presence.get(auth.sub);
                 if (current) {
@@ -218,19 +239,7 @@ export function attachCollaboration(server) {
         });
 
         socket.on('close', () => {
-          room.clients.delete(socket);
-
-          const hasOtherSockets = Array.from(room.clients).some(
-            (client) => client.userId === auth.sub,
-          );
-
-          if (!hasOtherSockets) {
-            room.presence.delete(auth.sub);
-            broadcast(
-              room,
-              JSON.stringify({ type: 'presence', event: 'leave', userId: auth.sub }),
-            );
-          }
+          removeClientPresence(room, socket, auth.sub);
 
           if (room.pendingUpdatesByAuthor.size > 0) {
             flushRoomUpdates(documentId, room);

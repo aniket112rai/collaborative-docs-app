@@ -129,6 +129,7 @@
     margin: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
+    height: auto !important;
     min-height: 0 !important;
     background: #ffffff !important;
     color: #000000 !important;
@@ -143,5 +144,17 @@
     box-shadow: none !important;
     height: auto !important;
     overflow: visible !important;
+  }
+
+  /* The screen sheets have a fixed visual height. In print, let the contents
+     fit within the printable area and break only between logical document pages. */
+  .doc-print-page {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .doc-print-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
   }
 }

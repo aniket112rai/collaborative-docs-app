@@ -36,6 +36,12 @@ export function useCollaboration(documentId) {
     let isOnline = navigator.onLine;
     let isDisposed = false;
 
+    function leaveRoom() {
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'leave' }));
+      }
+    }
+
     function setPeerPresence(message) {
       if (!message) return;
 
@@ -145,6 +151,7 @@ export function useCollaboration(documentId) {
       isDisposed = true;
       window.clearTimeout(reconnectTimer);
       if (socket) {
+        leaveRoom();
         socket.onclose = null;
         socket.onerror = null;
         socket.close();
@@ -169,6 +176,7 @@ export function useCollaboration(documentId) {
       window.removeEventListener('beforeunload', handlePageHide);
       window.removeEventListener('pagehide', handlePageHide);
       if (socket) {
+        leaveRoom();
         socket.onclose = null;
         socket.onerror = null;
         socket.close();

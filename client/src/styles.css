@@ -15,20 +15,38 @@
   }
 }
 
-.cm-editor {
-  min-height: 800px;
-  height: auto;
-  font-size: 1rem;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 font-sans;
+  }
+  input {
+    @apply w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-slate-100 outline-none placeholder:text-slate-500 focus:border-violet-500;
+  }
 }
-.cm-editor.cm-focused {
-  outline: none;
+
+@layer components {
+  .primary {
+    @apply rounded-lg bg-violet-600 px-4 py-2.5 font-semibold text-white transition hover:bg-violet-500;
+  }
 }
-.cm-scroller {
-  min-height: 800px;
-  height: auto;
-  overflow: visible !important;
+
+/* Google Docs White Paper Editor Workspace */
+.doc-workspace {
+  background-color: #0f172a;
 }
-.cm-content {
+
+.doc-paper-shadow {
+  box-shadow:
+    0 20px 25px -5px rgba(0, 0, 0, 0.5),
+    0 8px 10px -6px rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.doc-textarea {
   font-family:
     ui-sans-serif,
     system-ui,
@@ -40,114 +58,90 @@
     Arial,
     sans-serif;
   line-height: 1.85rem;
-  color: #f8fafc;
-  padding: 0 !important;
-}
-.cm-line {
-  padding: 0 !important;
-}
-.cm-gutters {
-  display: none;
-}
-
-.doc-paper-sheet {
+  color: #0f172a;
+  background-color: transparent;
+  /* Keep this content box identical to the cursor overlay. Browsers apply a
+     small textarea padding and border by default, which otherwise shifts the
+     native text relative to the peer cursor layer. */
+  box-sizing: border-box;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  resize: none;
+  outline: none;
   width: 100%;
-  max-width: 816px;
-  min-height: 960px;
-  height: auto;
-  background-color: #0f172a;
-  border: 1px solid rgba(51, 65, 85, 0.6);
-  border-radius: 12px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85);
-  padding: 48px 64px 48px 64px;
-  margin-bottom: 60px;
-  position: relative;
 }
 
-.doc-page-break-widget {
-  margin: 0 -64px 0 -64px;
-  user-select: none;
+.doc-textarea::selection {
+  background-color: #93c5fd;
 }
 
-.doc-page-bottom-padding {
-  height: 40px;
-  background-color: #0f172a;
-}
-
-.doc-page-bottom-edge {
-  height: 12px;
-  background-color: #0f172a;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.6);
-  border-bottom-left-radius: 12px;
-  border-bottom-right-radius: 12px;
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.6);
-}
-
-.doc-page-gap-banner {
-  height: 48px;
-  background-color: #020617;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  z-index: 5;
-}
-
-.doc-page-gap-banner span {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #94a3b8;
-  background-color: #0f172a;
-  padding: 5px 16px;
-  border-radius: 9999px;
-  border: 1px solid rgba(51, 65, 85, 0.8);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-}
-
-.doc-page-top-edge {
-  height: 12px;
-  background-color: #0f172a;
-  border-top: 1px solid rgba(51, 65, 85, 0.6);
-  border-top-left-radius: 12px;
-  border-top-right-radius: 12px;
-  box-shadow: 0 -10px 20px rgba(0, 0, 0, 0.6);
-}
-
-.doc-page-top-padding {
-  height: 40px;
-  background-color: #0f172a;
-}
-
-.cm-peer-caret-container {
-  position: relative;
-  display: inline-block;
-  width: 0;
-  height: 1.3em;
-  vertical-align: text-top;
-  user-select: none;
-}
-.cm-peer-caret {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -1px;
-  width: 2px;
-  border-radius: 1px;
-  pointer-events: none;
-}
-.cm-peer-label {
-  position: absolute;
-  top: -1.35em;
-  left: -2px;
-  font-size: 10px;
+.doc-peer-badge {
+  font-size: 9px;
   font-weight: 600;
   line-height: 1;
   color: #ffffff;
   padding: 2px 5px;
-  border-radius: 4px;
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 20;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  border-radius: 3px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* Clean Print / Save as PDF rules */
+@media print {
+  @page {
+    size: letter portrait;
+    margin: 20mm;
+  }
+
+  /* Hide app header, toolbar, status bar, avatars, dialogs, buttons */
+  header,
+  footer,
+  .docs-toolbar,
+  .no-print,
+  button,
+  .doc-page-banner,
+  .doc-page-gap {
+    display: none !important;
+  }
+
+  html,
+  body,
+  main,
+  .doc-workspace,
+  .doc-paper-container {
+    background: #ffffff !important;
+    color: #000000 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .doc-paper-sheet {
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .doc-textarea {
+    color: #000000 !important;
+    background: #ffffff !important;
+    resize: none !important;
+    outline: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
 }

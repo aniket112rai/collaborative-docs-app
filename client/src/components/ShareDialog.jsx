@@ -13,7 +13,7 @@ export default function ShareDialog({ documentId, onClose }) {
     }
   }
   return (
-    <div className="fixed inset-0 z-10 grid place-items-center bg-slate-950/80 p-5">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/80 p-5 backdrop-blur-sm">
       <section className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl">
         <div className="flex items-start justify-between">
           <div>

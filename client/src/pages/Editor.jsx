@@ -1,216 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { EditorState, StateField, Transaction } from '@codemirror/state';
-import {
-  Decoration,
-  drawSelection,
-  dropCursor,
-  EditorView,
-  keymap,
-  ViewPlugin,
-  WidgetType,
-} from '@codemirror/view';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import HistoryDialog from '../components/HistoryDialog';
 import MembersDialog from '../components/MembersDialog';
 import ShareDialog from '../components/ShareDialog';
+import { useAuth } from '../context/AuthContext';
 import { useCollaboration } from '../hooks/useCollaboration';
 import { api } from '../lib/api';
 
 const LINES_PER_PAGE = 26;
-
-const darkTheme = EditorView.theme(
-  {
-    '&': {
-      color: '#f8fafc',
-      backgroundColor: 'transparent',
-      fontSize: '16px',
-      height: '100%',
-      minHeight: '800px',
-    },
-    '.cm-scroller': {
-      overflow: 'visible',
-      minHeight: '800px',
-    },
-    '.cm-content': {
-      caretColor: '#38bdf8',
-      padding: '0',
-      fontFamily:
-        'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-      lineHeight: '1.85rem',
-      color: '#f8fafc',
-    },
-    '&.cm-focused .cm-cursor': {
-      borderLeftColor: '#38bdf8',
-      borderLeftWidth: '2px',
-    },
-    '&.cm-focused .cm-selectionBackground, ::selection': {
-      backgroundColor: '#3b82f640',
-    },
-    '.cm-gutters': {
-      backgroundColor: 'transparent',
-      color: '#64748b',
-      border: 'none',
-    },
-    '.cm-line': {
-      padding: '0',
-    },
-  },
-  { dark: true },
-);
-
-class PeerCursorWidget extends WidgetType {
-  constructor(name, color) {
-    super();
-    this.name = name;
-    this.color = color;
-  }
-
-  toDOM() {
-    const wrap = document.createElement('span');
-    wrap.className = 'cm-peer-caret-container';
-
-    const caret = document.createElement('span');
-    caret.className = 'cm-peer-caret';
-    caret.style.backgroundColor = this.color;
-
-    const label = document.createElement('span');
-    label.className = 'cm-peer-label';
-    label.style.backgroundColor = this.color;
-    label.textContent = this.name;
-
-    wrap.appendChild(caret);
-    wrap.appendChild(label);
-    return wrap;
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
-
-function createPeerCursorsExtension(getPeers) {
-  return ViewPlugin.fromClass(
-    class {
-      constructor(view) {
-        this.decorations = this.buildDecorations(view);
-      }
-
-      update(update) {
-        this.decorations = this.buildDecorations(update.view);
-      }
-
-      buildDecorations(view) {
-        try {
-          const builder = [];
-          const peers = getPeers() || [];
-          const docLen = view.state.doc.length;
-          for (const peer of peers) {
-            if (!peer || !peer.selection || typeof peer.selection.from !== 'number')
-              continue;
-            const pos = Math.max(0, Math.min(peer.selection.from, docLen));
-            const widget = Decoration.widget({
-              widget: new PeerCursorWidget(
-                peer.name || 'Collaborator',
-                peer.color || '#ec4899',
-              ),
-              side: 1,
-            });
-            builder.push(widget.range(pos));
-          }
-          builder.sort((a, b) => a.from - b.from);
-          return Decoration.set(builder, true);
-        } catch (e) {
-          console.error('Error building peer cursors:', e);
-          return Decoration.none;
-        }
-      }
-    },
-    {
-      decorations: (v) => v.decorations,
-    },
-  );
-}
-
-class PageBreakWidget extends WidgetType {
-  constructor(pageNum) {
-    super();
-    this.pageNum = pageNum;
-  }
-
-  toDOM() {
-    const wrap = document.createElement('div');
-    wrap.className = 'doc-page-break-widget';
-
-    const prevBottomPadding = document.createElement('div');
-    prevBottomPadding.className = 'doc-page-bottom-padding';
-
-    const prevBottomEdge = document.createElement('div');
-    prevBottomEdge.className = 'doc-page-bottom-edge';
-
-    const gap = document.createElement('div');
-    gap.className = 'doc-page-gap-banner';
-    gap.innerHTML = `<span>PAGE ${this.pageNum}</span>`;
-
-    const nextTopEdge = document.createElement('div');
-    nextTopEdge.className = 'doc-page-top-edge';
-
-    const nextTopPadding = document.createElement('div');
-    nextTopPadding.className = 'doc-page-top-padding';
-
-    wrap.appendChild(prevBottomPadding);
-    wrap.appendChild(prevBottomEdge);
-    wrap.appendChild(gap);
-    wrap.appendChild(nextTopEdge);
-    wrap.appendChild(nextTopPadding);
-    return wrap;
-  }
-
-  eq(other) {
-    return other.pageNum === this.pageNum;
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
-
-function buildPageBreakDecorations(state) {
-  try {
-    const builder = [];
-    const doc = state.doc;
-    for (let lineNo = 1; lineNo <= doc.lines; lineNo++) {
-      if (lineNo > 1 && (lineNo - 1) % LINES_PER_PAGE === 0) {
-        const line = doc.line(lineNo);
-        const pageNum = Math.floor((lineNo - 1) / LINES_PER_PAGE) + 1;
-        const widget = Decoration.widget({
-          widget: new PageBreakWidget(pageNum),
-          side: -1,
-          block: true,
-        });
-        builder.push(widget.range(line.from));
-      }
-    }
-    builder.sort((a, b) => a.from - b.from);
-    return Decoration.set(builder, true);
-  } catch (e) {
-    console.error('Error building page breaks:', e);
-    return Decoration.none;
-  }
-}
-
-const pageBreaksField = StateField.define({
-  create(state) {
-    return buildPageBreakDecorations(state);
-  },
-  update(decorations, tr) {
-    if (tr.docChanged) {
-      return buildPageBreakDecorations(tr.state);
-    }
-    return decorations;
-  },
-  provide: (f) => EditorView.decorations.from(f),
-});
 
 function SyncStatus({ status }) {
   const labels = { Offline: '📴 Offline', Saved: '✓ Saved' };
@@ -239,11 +36,89 @@ function ParticipantAvatars({ peers }) {
   );
 }
 
+function PeerCursorsOverlay({
+  pageText = '',
+  pageCharStart = 0,
+  peers = [],
+  currentUserId,
+}) {
+  const activePeers = (peers || []).filter(
+    (p) =>
+      p &&
+      p.userId &&
+      p.userId !== currentUserId &&
+      p.selection &&
+      typeof p.selection.from === 'number',
+  );
+
+  const pageEnd = pageCharStart + pageText.length;
+  const pagePeers = activePeers.filter((p) => {
+    const globalPos = p.selection.from;
+    return globalPos >= pageCharStart && globalPos <= pageEnd;
+  });
+
+  if (!pagePeers.length) return null;
+
+  const sortedPeers = pagePeers
+    .map((p) => ({
+      ...p,
+      localPos: Math.max(0, Math.min(p.selection.from - pageCharStart, pageText.length)),
+    }))
+    .sort((a, b) => a.localPos - b.localPos);
+
+  const elements = [];
+  let lastIndex = 0;
+  const textLen = pageText.length;
+
+  sortedPeers.forEach((peer) => {
+    const pos = peer.localPos;
+    if (pos > lastIndex) {
+      elements.push(
+        <span key={`text-${lastIndex}-${pos}`}>{pageText.slice(lastIndex, pos)}</span>,
+      );
+    }
+    lastIndex = pos;
+
+    elements.push(
+      <span
+        key={`peer-${peer.userId}`}
+        className="relative inline-block h-[1.85rem] w-0 align-top select-none pointer-events-none"
+      >
+        {/* The anchor has the same height as an editor line, so the caret is
+            positioned from the line top rather than from the text baseline. */}
+        <span
+          style={{ backgroundColor: peer.color || '#ec4899' }}
+          className="absolute inset-y-0 -left-px w-[1.5px] rounded-full animate-pulse shadow-xs z-30"
+        />
+        <span
+          style={{ backgroundColor: peer.color || '#ec4899' }}
+          className="absolute -top-1 -left-0.5 px-1 py-0.5 rounded-[8px] text-[10px] font-semibold text-white leading-none shadow-sm whitespace-nowrap z-40 pointer-events-none"
+        >
+          {peer.name || 'Collaborator'}
+        </span>
+      </span>,
+    );
+  });
+
+  if (lastIndex < textLen) {
+    elements.push(<span key={`text-end`}>{pageText.slice(lastIndex)}</span>);
+  }
+
+  return (
+    <div
+      aria-hidden="true"
+      className="absolute top-[64px] left-[64px] right-[64px] sm:top-[72px] sm:left-[72px] sm:right-[72px] bottom-[64px] sm:bottom-[72px] pointer-events-none font-sans text-base leading-[1.85rem] text-transparent whitespace-pre-wrap break-words overflow-hidden no-print z-10"
+    >
+      {elements}
+    </div>
+  );
+}
+
 export default function Editor() {
   const { id: documentId } = useParams();
   const navigate = useNavigate();
-  const editorHostRef = useRef();
-  const editorViewRef = useRef();
+  const textareaRefs = useRef([]);
+  const { user } = useAuth();
   const [document, setDocument] = useState();
   const [accessRole, setAccessRole] = useState();
   const [error, setError] = useState('');
@@ -252,6 +127,25 @@ export default function Editor() {
   const [isMembersOpen, setIsMembersOpen] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  const [textValue, setTextValue] = useState('');
+
+  const [docStats, setDocStats] = useState({
+    words: 0,
+    chars: 0,
+    lines: 1,
+    pages: 1,
+    currentPage: 1,
+  });
+
+  const {
+    doc,
+    peers,
+    role: realtimeRole,
+    sendAwareness,
+    status,
+  } = useCollaboration(documentId);
+  const role = realtimeRole || accessRole;
+  const currentUserId = user?.id;
 
   async function handleRenameSubmit(e) {
     e.preventDefault();
@@ -284,44 +178,20 @@ export default function Editor() {
       setError(err.response?.data?.error || 'Failed to delete document');
     }
   }
-  const [docStats, setDocStats] = useState({
-    words: 0,
-    chars: 0,
-    lines: 1,
-    pages: 1,
-    currentPage: 1,
-  });
 
-  const {
-    doc,
-    peers,
-    role: realtimeRole,
-    sendAwareness,
-    status,
-  } = useCollaboration(documentId);
-  const role = realtimeRole || accessRole;
-
-  const peersRef = useRef(peers);
-  useEffect(() => {
-    peersRef.current = peers;
-    if (editorViewRef.current) {
-      editorViewRef.current.dispatch({});
-    }
-  }, [peers]);
-
-  function updateStats(view) {
-    if (!view || !view.state || !view.state.doc) return;
-    const text = view.state.doc.toString();
-    const lines = view.state.doc.lines;
+  function updateStats(text, globalCursorPos = 0) {
+    const lines = text ? text.split('\n').length : 1;
     const words = text.trim() ? text.trim().split(/\s+/).length : 0;
     const chars = text.length;
     const pages = Math.max(1, Math.ceil(lines / LINES_PER_PAGE));
-    const headPos = view.state.selection?.main?.head || 0;
-    const currentLine = view.state.doc.lineAt(headPos).number;
+
+    const textBeforeCursor = text.slice(0, globalCursorPos);
+    const currentLine = textBeforeCursor.split('\n').length;
     const currentPage = Math.min(
       pages,
       Math.max(1, Math.floor((currentLine - 1) / LINES_PER_PAGE) + 1),
     );
+
     setDocStats({ words, chars, lines, pages, currentPage });
   }
 
@@ -343,90 +213,93 @@ export default function Editor() {
     loadDocument();
   }, [documentId]);
 
+  // Sync Yjs doc content to local state
   useEffect(() => {
-    if (!document || !role || !editorHostRef.current) {
-      return undefined;
-    }
-
-    if (editorViewRef.current) {
-      editorViewRef.current.destroy();
-      editorViewRef.current = null;
-    }
-
+    if (!doc) return;
     const ytext = doc.getText('content');
 
-    function syncEditorFromYjs(event, transaction) {
-      if (transaction && transaction.origin === 'codemirror') {
-        return;
-      }
+    const initialText = ytext.toString();
+    setTextValue(initialText);
+    updateStats(initialText, 0);
 
-      const nextValue = ytext.toString();
-      const view = editorViewRef.current;
-      if (!view) return;
+    function handleYjsUpdate(event, transaction) {
+      if (transaction?.origin === 'local') return;
 
-      const currentValue = view.state.doc.toString();
-      if (currentValue !== nextValue) {
-        view.dispatch({
-          changes: { from: 0, to: currentValue.length, insert: nextValue },
-          annotations: Transaction.userEvent.of('yjs'),
-        });
-        updateStats(view);
-      }
+      const nextText = ytext.toString();
+      setTextValue(nextText);
+      updateStats(nextText, 0);
     }
 
-    const state = EditorState.create({
-      doc: ytext.toString(),
-      extensions: [
-        history(),
-        drawSelection(),
-        dropCursor(),
-        darkTheme,
-        createPeerCursorsExtension(() => peersRef.current),
-        pageBreaksField,
-        EditorView.lineWrapping,
-        EditorView.editable.of(role !== 'VIEWER'),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
-        EditorView.updateListener.of((update) => {
-          updateStats(update.view);
-
-          if (
-            update.docChanged &&
-            !update.transactions.some(
-              (tr) => tr.annotation(Transaction.userEvent) === 'yjs',
-            )
-          ) {
-            const newText = update.state.doc.toString();
-            doc.transact(() => {
-              ytext.delete(0, ytext.length);
-              ytext.insert(0, newText);
-            }, 'codemirror');
-          }
-
-          if (update.selectionSet) {
-            sendAwareness({
-              from: update.state.selection.main.from,
-              to: update.state.selection.main.to,
-            });
-          }
-        }),
-      ],
-    });
-
-    const editorView = new EditorView({
-      state,
-      parent: editorHostRef.current,
-    });
-
-    editorViewRef.current = editorView;
-    updateStats(editorView);
-    ytext.observe(syncEditorFromYjs);
-
+    ytext.observe(handleYjsUpdate);
     return () => {
-      ytext.unobserve(syncEditorFromYjs);
-      editorView.destroy();
-      editorViewRef.current = null;
+      ytext.unobserve(handleYjsUpdate);
     };
-  }, [documentId, document, role, doc, sendAwareness]);
+  }, [doc]);
+
+  function handlePageTextChange(idx, e) {
+    const newPageText = e.target.value;
+    const pageCursorPos = e.target.selectionStart;
+
+    const allLines = textValue.split('\n');
+    const startLineIdx = idx * LINES_PER_PAGE;
+    const endLineIdx = (idx + 1) * LINES_PER_PAGE;
+
+    const beforeLines = allLines.slice(0, startLineIdx);
+    const afterLines = allLines.slice(endLineIdx);
+    const newPageLines = newPageText.split('\n');
+
+    const newAllLines = [...beforeLines, ...newPageLines, ...afterLines];
+    const newGlobalText = newAllLines.join('\n');
+
+    const beforeCharCount =
+      beforeLines.length > 0 ? beforeLines.join('\n').length + 1 : 0;
+    const globalCursorPos = beforeCharCount + pageCursorPos;
+
+    setTextValue(newGlobalText);
+
+    if (doc) {
+      const ytext = doc.getText('content');
+      doc.transact(() => {
+        ytext.delete(0, ytext.length);
+        ytext.insert(0, newGlobalText);
+      }, 'local');
+    }
+
+    updateStats(newGlobalText, globalCursorPos);
+    sendAwareness({ from: globalCursorPos, to: globalCursorPos });
+
+    // Handle overflow to next page if page lines exceed 26
+    if (newPageLines.length > LINES_PER_PAGE) {
+      const nextPageIndex = idx + 1;
+      requestAnimationFrame(() => {
+        const nextEl = textareaRefs.current[nextPageIndex];
+        if (nextEl) {
+          nextEl.focus();
+          const targetPos = Math.max(0, pageCursorPos - (newPageText.length - 20));
+          nextEl.setSelectionRange(targetPos, targetPos);
+        }
+      });
+    }
+  }
+
+  function handlePageSelectionOrClick(idx, e) {
+    const el = e.target;
+    if (!el) return;
+    const pageCursorPos = el.selectionStart || 0;
+    const allLines = textValue.split('\n');
+    const startLineIdx = idx * LINES_PER_PAGE;
+    const beforeLines = allLines.slice(0, startLineIdx);
+    const beforeCharCount =
+      beforeLines.length > 0 ? beforeLines.join('\n').length + 1 : 0;
+    const globalCursorPos = beforeCharCount + pageCursorPos;
+
+    updateStats(textValue, globalCursorPos);
+    sendAwareness({ from: globalCursorPos, to: globalCursorPos });
+  }
+
+  function handlePrint() {
+    window.print();
+  }
 
   if (error) {
     return (
@@ -444,10 +317,15 @@ export default function Editor() {
     );
   }
 
+  const isReadOnly = role === 'VIEWER';
+  const allLines = textValue.split('\n');
+  const totalPages = Math.max(1, Math.ceil(allLines.length / LINES_PER_PAGE));
+  const pageArray = Array.from({ length: totalPages }, (_, i) => i + 1);
+
   return (
     <main className="flex h-screen flex-col bg-slate-950 text-slate-100 overflow-hidden">
       {/* Top Main Navigation Header */}
-      <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-5 py-3.5 backdrop-blur z-10">
+      <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900/80 px-5 py-3.5 backdrop-blur z-10 no-print">
         <div>
           <Link
             className="text-xs font-medium text-violet-400 hover:text-violet-300 transition"
@@ -551,7 +429,7 @@ export default function Editor() {
       </header>
 
       {/* Docs Toolbar */}
-      <div className="flex items-center justify-between border-b border-slate-800/80 bg-slate-900/40 px-6 py-2 text-xs text-slate-400">
+      <div className="flex items-center justify-between border-b border-slate-800/80 bg-slate-900/40 px-6 py-2 text-xs text-slate-400 docs-toolbar no-print">
         <div className="flex items-center gap-4">
           <span className="rounded px-2 py-1 bg-slate-800/80 text-slate-300 font-medium">
             100%
@@ -560,10 +438,31 @@ export default function Editor() {
           <span>Print Layout</span>
           <span className="h-3 w-px bg-slate-800" />
           <span>Paginated View</span>
+          <span className="h-3 w-px bg-slate-800" />
+          <button
+            onClick={handlePrint}
+            className="flex items-center gap-1.5 rounded bg-violet-600/80 hover:bg-violet-600 text-white px-2.5 py-1 text-xs font-medium transition shadow-sm"
+            title="Print document or Save as PDF"
+          >
+            <svg
+              className="w-3.5 h-3.5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H7a2 2 0 00-2 2v4h10z"
+              />
+            </svg>
+            Print / Save as PDF
+          </button>
         </div>
         <div className="flex items-center gap-4">
           <span>
-            {docStats.pages} Page{docStats.pages > 1 ? 's' : ''} Document
+            {totalPages} Page{totalPages > 1 ? 's' : ''} Document
           </span>
           <span className="h-3 w-px bg-slate-800" />
           <span className="flex items-center gap-1.5 rounded-md border border-slate-700/60 bg-slate-800/60 px-2.5 py-1 font-medium text-emerald-400">
@@ -573,20 +472,77 @@ export default function Editor() {
         </div>
       </div>
 
-      {/* Google Docs Canvas Workspace */}
-      <div className="flex-1 overflow-y-auto bg-slate-950 py-10 px-4 flex flex-col items-center scroll-smooth">
-        <div
-          ref={editorHostRef}
-          onClick={() => editorViewRef.current?.focus()}
-          className="doc-paper-sheet cursor-text transition-all focus-within:ring-1 focus-within:ring-violet-500/40"
-        />
+      {/* Google Docs Canvas Workspace (Uniform white paper pages stacked vertically) */}
+      <div className="flex-1 overflow-y-auto doc-workspace py-10 px-4 flex flex-col items-center scroll-smooth">
+        <div className="w-full max-w-[816px] relative flex flex-col items-center">
+          {pageArray.map((pageNum, idx) => {
+            const startLineIdx = idx * LINES_PER_PAGE;
+            const endLineIdx = (idx + 1) * LINES_PER_PAGE;
+            const pageLines = allLines.slice(startLineIdx, endLineIdx);
+            const pageText = pageLines.join('\n');
+
+            const beforeLines = allLines.slice(0, startLineIdx);
+            const pageCharStart =
+              beforeLines.length > 0 ? beforeLines.join('\n').length + 1 : 0;
+
+            return (
+              <div key={pageNum} className="w-full flex flex-col items-center">
+                {idx > 0 && (
+                  <div className="w-full flex items-center justify-center my-6 no-print doc-page-banner">
+                    <span className="rounded-full bg-slate-800 border border-slate-700 px-4 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-widest shadow-md">
+                      PAGE {pageNum} OF {totalPages}
+                    </span>
+                  </div>
+                )}
+
+                <div
+                  onClick={() => {
+                    const el = textareaRefs.current[idx];
+                    if (el) el.focus();
+                  }}
+                  className="w-full max-w-[816px] h-[1056px] bg-white text-slate-900 rounded-sm doc-paper-shadow relative p-[64px] sm:p-[72px] cursor-text transition-shadow doc-paper-sheet flex flex-col justify-start overflow-hidden"
+                >
+                  {/* Real-time Peer Caret Cursors Overlay for this page */}
+                  <PeerCursorsOverlay
+                    pageText={pageText}
+                    pageCharStart={pageCharStart}
+                    peers={peers}
+                    currentUserId={currentUserId}
+                  />
+
+                  {/* Textarea for editing page content */}
+                  <textarea
+                    ref={(el) => (textareaRefs.current[idx] = el)}
+                    value={pageText}
+                    onChange={(e) => handlePageTextChange(idx, e)}
+                    onClick={(e) => handlePageSelectionOrClick(idx, e)}
+                    onKeyUp={(e) => handlePageSelectionOrClick(idx, e)}
+                    onKeyDown={(e) => handlePageSelectionOrClick(idx, e)}
+                    onSelect={(e) => handlePageSelectionOrClick(idx, e)}
+                    onFocus={(e) => handlePageSelectionOrClick(idx, e)}
+                    readOnly={isReadOnly}
+                    placeholder={
+                      idx === 0
+                        ? isReadOnly
+                          ? 'View-only mode…'
+                          : 'Type your document content here…'
+                        : ''
+                    }
+                    rows={LINES_PER_PAGE}
+                    className="doc-textarea font-sans text-base leading-[1.85rem] text-slate-900 bg-transparent resize-none outline-none w-full h-[769px] overflow-hidden relative z-20"
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Bottom Status Bar */}
-      <footer className="sticky bottom-0 z-10 flex items-center justify-between border-t border-slate-800 bg-slate-900/90 px-6 py-2 text-xs text-slate-400 backdrop-blur">
+      <footer className="sticky bottom-0 z-10 flex items-center justify-between border-t border-slate-800 bg-slate-900/90 px-6 py-2 text-xs text-slate-400 backdrop-blur no-print">
         <div className="flex items-center gap-4">
           <span>
-            Page {docStats.currentPage || 1} of {docStats.pages}
+            Page {docStats.currentPage || 1} of {totalPages}
           </span>
           <span className="h-3 w-px bg-slate-800" />
           <span>{docStats.words} words</span>
@@ -595,7 +551,7 @@ export default function Editor() {
         </div>
         <div className="flex items-center gap-2 text-slate-500">
           <span className="h-2 w-2 rounded-full bg-emerald-400" />
-          <span>Real-time Auto-Paginated View</span>
+          <span>Real-time Google Docs View</span>
         </div>
       </footer>
 

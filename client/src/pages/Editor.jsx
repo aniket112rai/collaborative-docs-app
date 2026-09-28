@@ -431,13 +431,10 @@ export default function Editor() {
       {/* Docs Toolbar */}
       <div className="flex items-center justify-between border-b border-slate-800/80 bg-slate-900/40 px-6 py-2 text-xs text-slate-400 docs-toolbar no-print">
         <div className="flex items-center gap-4">
-          <span className="rounded px-2 py-1 bg-slate-800/80 text-slate-300 font-medium">
-            100%
+          <span>
+          Print Layout
           </span>
-          <span className="h-3 w-px bg-slate-800" />
-          <span>Print Layout</span>
-          <span className="h-3 w-px bg-slate-800" />
-          <span>Paginated View</span>
+          
           <span className="h-3 w-px bg-slate-800" />
           <button
             onClick={handlePrint}
@@ -551,7 +548,7 @@ export default function Editor() {
         </div>
         <div className="flex items-center gap-2 text-slate-500">
           <span className="h-2 w-2 rounded-full bg-emerald-400" />
-          <span>Real-time Google Docs View</span>
+          <span>Real-time Docs View</span>
         </div>
       </footer>
 
